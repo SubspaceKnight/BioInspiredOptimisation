@@ -635,3 +635,507 @@ def plot_batch_distribution(runs_df: pd.DataFrame, global_min_f: float) -> go.Fi
         margin=dict(l=55, r=25, t=55, b=105),
     )
     return fig
+
+
+def plot_step_walkthrough_1d(
+    *,
+    spec: BenchmarkSpec,
+    res: OptimizationResult,
+    bounds_x: tuple[float, float],
+    eval_step: int,
+    fog_of_war: bool = False,
+    neighborhood_name: str | None = None,
+    zoom_to_window: bool = False,
+) -> go.Figure:
+    """Plot detailed single-step mechanics (anchor, drift, neighborhood, offset, new probe) in 1D."""
+    fig = go.Figure()
+    low_x, high_x = bounds_x
+    recs = _slice_records(res, eval_step)
+    rec = recs[-1]
+    prior = recs[:-1]
+    color = ALGO_COLORS.get(res.algorithm_name, "#0F766E")
+    sigma_used = float(rec.step_size_before if rec.step_size_before is not None else rec.step_size)
+
+    # Determine viewport bounds (full domain or zoomed around current step)
+    view_lo_x, view_hi_x = low_x, high_x
+    if zoom_to_window:
+        domain_span = high_x - low_x
+        if rec.eval_index == 1 or rec.prev_x is None:
+            cx0 = float(rec.x[0])
+            half = max(3.0 * sigma_used, 0.04 * domain_span, 1e-4)
+            view_lo_x = max(low_x, cx0 - half)
+            view_hi_x = min(high_x, cx0 + half)
+        else:
+            prev_x0 = float(rec.prev_x[0])
+            drift_x0 = float(rec.drift[0]) if rec.drift is not None else 0.0
+            center_x0 = float(np.clip(prev_x0 + drift_x0, low_x, high_x))
+            cand_x0 = float(rec.x[0])
+            pts_x = [prev_x0, center_x0, cand_x0, center_x0 - sigma_used, center_x0 + sigma_used]
+            span_pts = max(pts_x) - min(pts_x)
+            pad = max(0.35 * span_pts, 1.5 * sigma_used, 1e-4)
+            view_lo_x = max(low_x, min(pts_x) - pad)
+            view_hi_x = min(high_x, max(pts_x) + pad)
+
+    vis_ys_all: list[float] = []
+    if not fog_of_war:
+        xs, ys = evaluate_grid_1d(spec.fn, view_lo_x, view_hi_x, num_points=600)
+        vis_ys_all.extend(ys.tolist())
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                name=f"True {spec.name}",
+                line=dict(color="#64748B", width=2.2),
+            )
+        )
+        fig.add_hline(
+            y=spec.global_min_f,
+            line_dash="dot",
+            line_color="#16A34A",
+            annotation_text=f"Global min f* = {spec.global_min_f:g}",
+            annotation_position="bottom right",
+        )
+
+    prior_acc = [r for r in prior if r.accepted]
+    prior_rej = [r for r in prior if not r.accepted]
+
+    if prior_rej:
+        fig.add_trace(
+            go.Scatter(
+                x=[float(r.x[0]) for r in prior_rej],
+                y=[r.f for r in prior_rej],
+                mode="markers",
+                name="Prior rejected (×)",
+                marker=dict(symbol="x", size=7, color=color, opacity=0.42),
+                customdata=[[r.eval_index, r.step_size] for r in prior_rej],
+                hovertemplate=(
+                    "Prior Rejected · eval #%{customdata[0]}<br>"
+                    "x = %{x:.5f}, f(x) = %{y:.6f}<br>"
+                    "σ_after = %{customdata[1]:.5g}<extra></extra>"
+                ),
+            )
+        )
+    if prior_acc:
+        fig.add_trace(
+            go.Scatter(
+                x=[float(r.x[0]) for r in prior_acc],
+                y=[r.f for r in prior_acc],
+                mode="lines+markers",
+                name="Prior accepted path",
+                line=dict(color=color, width=2),
+                marker=dict(size=6, color=color),
+                customdata=[[r.eval_index, r.step_size] for r in prior_acc],
+                hovertemplate=(
+                    "Prior Accepted · eval #%{customdata[0]}<br>"
+                    "x = %{x:.5f}, f(x) = %{y:.6f}<br>"
+                    "σ_after = %{customdata[1]:.5g}<extra></extra>"
+                ),
+            )
+        )
+
+    if rec.eval_index == 1 or rec.prev_x is None or rec.prev_f is None:
+        vis_ys_all.append(rec.f)
+        fig.add_trace(
+            go.Scatter(
+                x=[float(rec.x[0])],
+                y=[rec.f],
+                mode="markers",
+                name="Initial x₀ (best)",
+                marker=dict(symbol="star", size=15, color="#10B981", line=dict(width=1.5, color="black")),
+                hovertemplate=f"<b>Initial x₀</b><br>x = {float(rec.x[0]):.5f}<br>f(x₀) = {rec.f:.6f}<extra></extra>",
+            )
+        )
+    else:
+        prev_x = float(rec.prev_x[0])
+        prev_f = float(rec.prev_f)
+        drift_x = float(rec.drift[0]) if rec.drift is not None else 0.0
+        center_x = float(np.clip(prev_x + drift_x, low_x, high_x))
+        cand_x = float(rec.x[0])
+        offset_x = float(rec.offset[0]) if rec.offset is not None else (cand_x - prev_x - drift_x)
+        vis_ys_all.extend([prev_f, rec.f])
+
+        is_gaussian = neighborhood_name is not None and "Gaussian" in neighborhood_name
+        band_label = f"1σ Gaussian band ({sigma_used:.4g})" if is_gaussian else f"Search window ±σ ({sigma_used:.4g})"
+
+        fig.add_vrect(
+            x0=max(low_x, center_x - sigma_used),
+            x1=min(high_x, center_x + sigma_used),
+            fillcolor="rgba(245, 158, 11, 0.14)",
+            line_width=1.2,
+            line_dash="dash",
+            line_color="#F59E0B",
+            annotation_text=band_label,
+            annotation_position="top left",
+            annotation_font=dict(size=11, color="#F59E0B"),
+        )
+
+        anchor_label = "Anchor x_curr (best)" if not rec.accepted else "Anchor x_curr (before step)"
+        fig.add_trace(
+            go.Scatter(
+                x=[prev_x],
+                y=[prev_f],
+                mode="markers",
+                name=anchor_label,
+                marker=dict(symbol="diamond", size=12, color="#38BDF8", line=dict(width=1.5, color="black")),
+                hovertemplate=(
+                    f"<b>{anchor_label}</b><br>"
+                    f"x = {prev_x:.5f}<br>f(x) = {prev_f:.6f}<br>σ_before = {sigma_used:.5g}<extra></extra>"
+                ),
+            )
+        )
+
+        if abs(drift_x) > 1e-12:
+            fig.add_trace(
+                go.Scatter(
+                    x=[prev_x, center_x],
+                    y=[prev_f, prev_f],
+                    mode="lines+markers",
+                    name=f"Drift ({drift_x:+.4f})",
+                    line=dict(color="#F59E0B", width=3, dash="dot"),
+                    marker=dict(symbol="circle-open", size=9, color="#F59E0B", line=dict(width=2)),
+                    hovertemplate=(
+                        f"<b>Shifted Search Center</b><br>"
+                        f"x_curr + drift = {center_x:.5f}<br>drift = {drift_x:+.5f}<extra></extra>"
+                    ),
+                )
+            )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[center_x, cand_x],
+                y=[prev_f, rec.f],
+                mode="lines",
+                name=f"Offset ε ({offset_x:+.4f})",
+                line=dict(color="#10B981" if rec.accepted else "#EF4444", width=2, dash="dash"),
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[cand_x],
+                y=[rec.f],
+                mode="markers",
+                name=f"x_new ({'ACCEPTED → new best' if rec.accepted else 'REJECTED'})",
+                marker=dict(
+                    symbol="star" if rec.accepted else "x",
+                    size=15 if rec.accepted else 13,
+                    color="#10B981" if rec.accepted else "#EF4444",
+                    line=dict(width=1.5, color="white" if fog_of_war else "black"),
+                ),
+                hovertemplate=(
+                    f"<b>Candidate x_new ({rec.step_event})</b><br>"
+                    f"x_new = {cand_x:.5f}<br>"
+                    f"f(x_new) = {rec.f:.6f}<br>"
+                    f"σ_after = {rec.step_size:.5g}<extra></extra>"
+                ),
+            )
+        )
+
+    title_suffix = " [Fog of War]" if fog_of_war else ""
+    zoom_suffix = " [Zoomed]" if zoom_to_window else ""
+    yaxis_cfg: dict = {}
+    if zoom_to_window:
+        for r in prior:
+            if view_lo_x <= float(r.x[0]) <= view_hi_x:
+                vis_ys_all.append(r.f)
+        if vis_ys_all:
+            ymin, ymax = min(vis_ys_all), max(vis_ys_all)
+            ypad = max(0.12 * (ymax - ymin), 1e-5)
+            yaxis_cfg = dict(range=[ymin - ypad, ymax + ypad])
+
+    fig.update_layout(
+        title=dict(
+            text=f"{_short_name(res.algorithm_name)} — Eval #{rec.eval_index} ({rec.step_event}){title_suffix}{zoom_suffix}",
+            x=0.0,
+            xanchor="left",
+        ),
+        xaxis_title="x",
+        yaxis_title="f(x)",
+        xaxis=dict(range=[view_lo_x, view_hi_x]),
+        yaxis=yaxis_cfg,
+        template="plotly_dark" if fog_of_war else "plotly_white",
+        height=510,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.20,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=11),
+        ),
+        margin=dict(l=55, r=25, t=60, b=135),
+    )
+    return fig
+
+
+def plot_step_walkthrough_2d(
+    *,
+    spec: BenchmarkSpec,
+    res: OptimizationResult,
+    bounds_x: tuple[float, float],
+    bounds_y: tuple[float, float],
+    eval_step: int,
+    fog_of_war: bool = False,
+    neighborhood_name: str | None = None,
+    zoom_to_window: bool = False,
+) -> go.Figure:
+    """Plot detailed single-step mechanics (anchor, drift vector, σ neighborhood, offset, new probe) in 2D."""
+    fig = go.Figure()
+    low_x, high_x = bounds_x
+    low_y, high_y = bounds_y
+    recs = _slice_records(res, eval_step)
+    rec = recs[-1]
+    prior = recs[:-1]
+    color = ALGO_COLORS.get(res.algorithm_name, "#0F766E")
+    sigma_used = float(rec.step_size_before if rec.step_size_before is not None else rec.step_size)
+
+    view_lo_x, view_hi_x = low_x, high_x
+    view_lo_y, view_hi_y = low_y, high_y
+    if zoom_to_window:
+        domain_half = 0.5 * min(high_x - low_x, high_y - low_y)
+        if rec.eval_index == 1 or rec.prev_x is None:
+            mx, my = float(rec.x[0]), float(rec.x[1])
+            half = min(domain_half, max(3.0 * sigma_used, 0.08 * domain_half, 1e-3))
+        else:
+            px0, py0 = float(rec.prev_x[0]), float(rec.prev_x[1])
+            dx0 = float(rec.drift[0]) if rec.drift is not None else 0.0
+            dy0 = float(rec.drift[1]) if rec.drift is not None else 0.0
+            cx0 = float(np.clip(px0 + dx0, low_x, high_x))
+            cy0 = float(np.clip(py0 + dy0, low_y, high_y))
+            nx0, ny0 = float(rec.x[0]), float(rec.x[1])
+            all_vx = [px0, cx0, nx0, cx0 - sigma_used, cx0 + sigma_used]
+            all_vy = [py0, cy0, ny0, cy0 - sigma_used, cy0 + sigma_used]
+            mx = 0.5 * (min(all_vx) + max(all_vx))
+            my = 0.5 * (min(all_vy) + max(all_vy))
+            span_req = max(max(all_vx) - min(all_vx), max(all_vy) - min(all_vy))
+            half = min(domain_half, max(0.65 * span_req, 2.2 * sigma_used, 1e-3))
+
+        view_lo_x = max(low_x, mx - half)
+        view_hi_x = min(high_x, view_lo_x + 2.0 * half)
+        if view_hi_x - view_lo_x < 2.0 * half:
+            view_lo_x = max(low_x, view_hi_x - 2.0 * half)
+        view_lo_y = max(low_y, my - half)
+        view_hi_y = min(high_y, view_lo_y + 2.0 * half)
+        if view_hi_y - view_lo_y < 2.0 * half:
+            view_lo_y = max(low_y, view_hi_y - 2.0 * half)
+
+    if not fog_of_war:
+        xs, ys, gz = evaluate_grid_2d(spec.fn, view_lo_x, view_hi_x, view_lo_y, view_hi_y, num_points=140)
+        fig.add_trace(
+            go.Contour(
+                x=xs,
+                y=ys,
+                z=gz,
+                colorscale="Viridis",
+                contours=dict(coloring="heatmap", showlabels=False),
+                opacity=0.80,
+                colorbar=dict(title="f(x₁, x₂)"),
+                name="Ackley landscape",
+            )
+        )
+        if view_lo_x <= 0.0 <= view_hi_x and view_lo_y <= 0.0 <= view_hi_y:
+            fig.add_trace(
+                go.Scatter(
+                    x=[0.0],
+                    y=[0.0],
+                    mode="markers",
+                    name="Global min (0, 0)",
+                    marker=dict(symbol="x-thin", size=14, color="#22C55E", line=dict(width=3, color="#22C55E")),
+                )
+            )
+    else:
+        all_fs = [r.f for r in recs]
+        cmin = min(all_fs) if all_fs else 0.0
+        cmax = max(all_fs) if all_fs else 20.0
+        if cmax <= cmin:
+            cmax = cmin + 1.0
+
+    prior_acc = [r for r in prior if r.accepted]
+    prior_rej = [r for r in prior if not r.accepted]
+
+    if prior_rej:
+        rej_marker: dict = dict(symbol="x", size=7, opacity=0.55)
+        if fog_of_war:
+            rej_marker.update(color=[r.f for r in prior_rej], colorscale="Viridis", cmin=cmin, cmax=cmax, showscale=False)
+        else:
+            rej_marker["color"] = color
+        fig.add_trace(
+            go.Scatter(
+                x=[float(r.x[0]) for r in prior_rej],
+                y=[float(r.x[1]) for r in prior_rej],
+                mode="markers",
+                name="Prior rejected (×)",
+                marker=rej_marker,
+                customdata=[[r.eval_index, r.f, r.step_size] for r in prior_rej],
+                hovertemplate=(
+                    "Prior Rejected · eval #%{customdata[0]}<br>"
+                    "x = (%{x:.4f}, %{y:.4f})<br>"
+                    "f(x) = %{customdata[1]:.5f}<br>"
+                    "σ_after = %{customdata[2]:.4g}<extra></extra>"
+                ),
+            )
+        )
+
+    if prior_acc:
+        acc_marker: dict = dict(size=6, line=dict(width=1, color="white"))
+        if fog_of_war:
+            acc_marker.update(
+                color=[r.f for r in prior_acc],
+                colorscale="Viridis",
+                cmin=cmin,
+                cmax=cmax,
+                colorbar=dict(title="Observed f(x)"),
+                showscale=True,
+            )
+        else:
+            acc_marker["color"] = color
+        fig.add_trace(
+            go.Scatter(
+                x=[float(r.x[0]) for r in prior_acc],
+                y=[float(r.x[1]) for r in prior_acc],
+                mode="lines+markers",
+                name="Prior accepted path",
+                line=dict(color=color, width=2.2),
+                marker=acc_marker,
+                customdata=[[r.eval_index, r.f, r.step_size] for r in prior_acc],
+                hovertemplate=(
+                    "Prior Accepted · eval #%{customdata[0]}<br>"
+                    "x = (%{x:.4f}, %{y:.4f})<br>"
+                    "f(x) = %{customdata[1]:.5f}<br>"
+                    "σ_after = %{customdata[2]:.4g}<extra></extra>"
+                ),
+            )
+        )
+
+    if rec.eval_index == 1 or rec.prev_x is None:
+        fig.add_trace(
+            go.Scatter(
+                x=[float(rec.x[0])],
+                y=[float(rec.x[1])],
+                mode="markers",
+                name="Initial x₀ (best)",
+                marker=dict(symbol="star", size=15, color="#10B981", line=dict(width=1.5, color="white")),
+                hovertemplate=(
+                    f"<b>Initial x₀</b><br>x = ({float(rec.x[0]):.4f}, {float(rec.x[1]):.4f})"
+                    f"<br>f(x₀) = {rec.f:.6f}<extra></extra>"
+                ),
+            )
+        )
+    else:
+        px, py = float(rec.prev_x[0]), float(rec.prev_x[1])
+        dx = float(rec.drift[0]) if rec.drift is not None else 0.0
+        dy = float(rec.drift[1]) if rec.drift is not None else 0.0
+        cx = float(np.clip(px + dx, low_x, high_x))
+        cy = float(np.clip(py + dy, low_y, high_y))
+        nx, ny = float(rec.x[0]), float(rec.x[1])
+
+        is_box = neighborhood_name is not None and "Box" in neighborhood_name
+        is_gaussian = neighborhood_name is not None and "Gaussian" in neighborhood_name
+        if is_box:
+            nb_xs = [cx - sigma_used, cx + sigma_used, cx + sigma_used, cx - sigma_used, cx - sigma_used]
+            nb_ys = [cy - sigma_used, cy - sigma_used, cy + sigma_used, cy + sigma_used, cy - sigma_used]
+            nb_label = f"Search box ±σ ({sigma_used:.4g})"
+        else:
+            theta = np.linspace(0.0, 2.0 * np.pi, 90)
+            nb_xs = cx + sigma_used * np.cos(theta)
+            nb_ys = cy + sigma_used * np.sin(theta)
+            nb_label = f"1σ circle ({sigma_used:.4g})" if is_gaussian else f"Search radius σ ({sigma_used:.4g})"
+
+        fig.add_trace(
+            go.Scatter(
+                x=nb_xs,
+                y=nb_ys,
+                mode="lines",
+                name=nb_label,
+                line=dict(color="#F59E0B", width=2, dash="dash"),
+            )
+        )
+
+        anchor_label = "Anchor x_curr (best)" if not rec.accepted else "Anchor x_curr (before step)"
+        fig.add_trace(
+            go.Scatter(
+                x=[px],
+                y=[py],
+                mode="markers",
+                name=anchor_label,
+                marker=dict(symbol="diamond", size=12, color="#38BDF8", line=dict(width=1.5, color="white")),
+                hovertemplate=(
+                    f"<b>{anchor_label}</b><br>"
+                    f"x = ({px:.4f}, {py:.4f})<br>f(x) = {rec.prev_f:.6f}<br>σ_before = {sigma_used:.5g}<extra></extra>"
+                ),
+            )
+        )
+
+        if abs(dx) > 1e-12 or abs(dy) > 1e-12:
+            fig.add_trace(
+                go.Scatter(
+                    x=[px, cx],
+                    y=[py, cy],
+                    mode="lines+markers",
+                    name="Drift shift",
+                    line=dict(color="#F59E0B", width=3, dash="dot"),
+                    marker=dict(symbol="circle-open", size=9, color="#F59E0B", line=dict(width=2)),
+                    hovertemplate=(
+                        f"<b>Shifted Search Center</b><br>"
+                        f"center = ({cx:.4f}, {cy:.4f})<br>drift = ({dx:+.4f}, {dy:+.4f})<extra></extra>"
+                    ),
+                )
+            )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[cx, nx],
+                y=[cy, ny],
+                mode="lines",
+                name="Sample offset ε",
+                line=dict(color="#10B981" if rec.accepted else "#EF4444", width=2, dash="dash"),
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[nx],
+                y=[ny],
+                mode="markers",
+                name=f"x_new ({'ACCEPTED → new best' if rec.accepted else 'REJECTED'})",
+                marker=dict(
+                    symbol="star" if rec.accepted else "x",
+                    size=15 if rec.accepted else 13,
+                    color="#10B981" if rec.accepted else "#EF4444",
+                    line=dict(width=1.5, color="white"),
+                ),
+                hovertemplate=(
+                    f"<b>Candidate x_new ({rec.step_event})</b><br>"
+                    f"x_new = ({nx:.4f}, {ny:.4f})<br>"
+                    f"f(x_new) = {rec.f:.6f}<br>"
+                    f"σ_after = {rec.step_size:.5g}<extra></extra>"
+                ),
+            )
+        )
+
+    title_suffix = " [Fog of War]" if fog_of_war else ""
+    zoom_suffix = " [Zoomed]" if zoom_to_window else ""
+    fig.update_layout(
+        title=dict(
+            text=f"{_short_name(res.algorithm_name)} — Eval #{rec.eval_index} ({rec.step_event}){title_suffix}{zoom_suffix}",
+            x=0.0,
+            xanchor="left",
+        ),
+        xaxis_title="x₁",
+        yaxis_title="x₂",
+        xaxis=dict(range=[view_lo_x, view_hi_x], scaleanchor="y", scaleratio=1, constrain="domain"),
+        yaxis=dict(range=[view_lo_y, view_hi_y], constrain="domain"),
+        template="plotly_dark" if fog_of_war else "plotly_white",
+        height=610,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.20,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=11),
+        ),
+        margin=dict(l=55, r=25, t=60, b=150),
+    )
+    return fig

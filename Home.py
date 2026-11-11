@@ -38,6 +38,7 @@ st.markdown(
   - **2. Methods:** Reusable solver design (`x0`, `objective_fn`, `neighborhood_fn`, `termination`), exact evaluation counting, and **Simple HC** vs. **Adaptive Momentum HC** (Adam-inspired first/second moments over successful steps).
   - **3. Results:** Interactive trajectory plots (1D line, 2D contour, 3D surface), adjustable step size/neighborhood/bounds, **Fog of War** black-box probe view with step-by-step replay slider, and paired multi-start statistics.
   - **4. Discussion:** Empirical takeaways on convergence speed, precision, local-minimum trapping, parameter sensitivity, and limitations.
+  - **5. Step-by-Step Dynamics:** Interactive single-evaluation walkthrough with live substituted equations, search windows/vectors, streaks (`accept_streak` / `reject_streak`), and variable transitions (`drift`, `offset ε`, `m`, `v`, `σ`).
 """
 )
 

@@ -32,6 +32,8 @@ from bio_inspired_optimisation.plotting import (
     plot_3d_surface_trajectory,
     plot_batch_distribution,
     plot_convergence_and_step_size,
+    plot_step_walkthrough_1d,
+    plot_step_walkthrough_2d,
 )
 from bio_inspired_optimisation.termination import TerminationCriterion
 
@@ -258,6 +260,93 @@ def test_experiments_and_fog_of_war_plots() -> None:
     assert len(fig_batch.data) == 4
 
 
+def test_evaluation_record_trace_and_walkthrough_plots() -> None:
+    spec_1d = BENCHMARKS["quadratic"]
+    bounds_1d = spec_1d.make_bounds(dim=1)
+    term = TerminationCriterion(max_evals=40)
+    simple_r, adapt_r = run_single_comparison(
+        spec=spec_1d,
+        initial_solution=np.array([7.5]),
+        bounds=bounds_1d,
+        neighborhood_name="Uniform Box [-δ, δ]ⁿ",
+        boundary_mode="clip",
+        step_size=0.6,
+        termination=term,
+        seed=42,
+    )
+
+    assert simple_r.params["step_size"] == pytest.approx(0.6)
+    assert adapt_r.params["initial_step_size"] == pytest.approx(0.6)
+    assert adapt_r.history[0].step_event == "Init"
+    assert adapt_r.history[0].t_mom_after == 0
+
+    for res in (simple_r, adapt_r):
+        for rec in res.history[1:]:
+            assert rec.prev_x is not None
+            assert rec.prev_f is not None
+            assert rec.offset is not None
+            assert rec.step_size_before is not None
+            drift_vec = np.zeros_like(rec.x) if rec.drift is None else rec.drift
+            assert np.allclose(rec.prev_x + drift_vec + rec.offset, rec.x, atol=1e-12)
+
+    events = [r.step_event for r in adapt_r.history]
+    assert "Accept (Grow σ)" in events
+    assert "Reject (Shrink σ)" in events
+
+    bx_1d = (float(bounds_1d[0][0]), float(bounds_1d[1][0]))
+    grow_idx = next(r.eval_index for r in adapt_r.history if r.step_event == "Accept (Grow σ)")
+    shrink_idx = next(r.eval_index for r in adapt_r.history if r.step_event == "Reject (Shrink σ)")
+
+    for step in (1, grow_idx, shrink_idx):
+        for fog in (False, True):
+            fig = plot_step_walkthrough_1d(
+                spec=spec_1d,
+                res=adapt_r,
+                bounds_x=bx_1d,
+                eval_step=step,
+                fog_of_war=fog,
+                neighborhood_name="Uniform Box [-δ, δ]ⁿ",
+                zoom_to_window=True,
+            )
+            assert any(tr.name and tr.name.startswith("True ") for tr in fig.data) is (not fog)
+
+    spec_2d = BENCHMARKS["ackley"]
+    bounds_2d = spec_2d.make_bounds(dim=2)
+    _, adapt_2d = run_single_comparison(
+        spec=spec_2d,
+        initial_solution=np.array([-3.0, 2.5]),
+        bounds=bounds_2d,
+        neighborhood_name="Uniform Box [-δ, δ]ⁿ",
+        boundary_mode="clip",
+        step_size=1.0,
+        termination=term,
+        seed=42,
+    )
+    bx_2d = (float(bounds_2d[0][0]), float(bounds_2d[1][0]))
+    fig_2d_box = plot_step_walkthrough_2d(
+        spec=spec_2d,
+        res=adapt_2d,
+        bounds_x=bx_2d,
+        bounds_y=bx_2d,
+        eval_step=3,
+        fog_of_war=False,
+        neighborhood_name="Uniform Box [-δ, δ]ⁿ",
+        zoom_to_window=True,
+    )
+    assert any(tr.name and tr.name.startswith("Search box") for tr in fig_2d_box.data)
+    fig_2d_fog = plot_step_walkthrough_2d(
+        spec=spec_2d,
+        res=adapt_2d,
+        bounds_x=bx_2d,
+        bounds_y=bx_2d,
+        eval_step=1,
+        fog_of_war=True,
+        neighborhood_name="Gaussian N(0, δ²I)",
+        zoom_to_window=False,
+    )
+    assert not any(tr.type == "contour" for tr in fig_2d_fog.data)
+
+
 def test_streamlit_multipage_app_renders() -> None:
     from streamlit.testing.v1 import AppTest
 
@@ -267,14 +356,70 @@ def test_streamlit_multipage_app_renders() -> None:
 
     at_ex1 = at_home.switch_page("pages/1_Exercise_01_Hill_Climbing.py").run()
     assert not at_ex1.exception
-    assert len(at_ex1.tabs) == 4
+    assert len(at_ex1.tabs) == 5
+    assert at_ex1.tabs[4].label == "5. Step-by-Step Dynamics"
 
+    # Tab 3 Fog of War remains toggle[0] and shows 1 warning
     at_ex1.toggle[0].set_value(True).run()
     assert not at_ex1.exception
     assert len(at_ex1.warning) == 1
 
+    # Switch to 1D quadratic and exercise Tab 5 dynamic walkthrough controls
     at_ex1.sidebar.selectbox[0].select("quadratic").run()
     assert not at_ex1.exception
+
+    step_before = int(at_ex1.slider(key="walkthrough_step").value)
+    at_ex1.button(key="walk_next").click().run()
+    assert not at_ex1.exception
+    assert int(at_ex1.slider(key="walkthrough_step").value) == step_before + 1
+
+    at_ex1.button(key="walk_prev").click().run()
+    assert not at_ex1.exception
+    assert int(at_ex1.slider(key="walkthrough_step").value) == step_before
+
+    # Jump to Grow and Shrink events, then verify clamping when max_evals decreases
+    at_ex1.button(key="walk_first_grow").click().run()
+    assert not at_ex1.exception
+    at_ex1.button(key="walk_first_shrink").click().run()
+    assert not at_ex1.exception
+
+    at_ex1.selectbox(key="walkthrough_algo").select("Simple Hill Climbing").run()
+    assert not at_ex1.exception
+
+    at_ex1.toggle(key="walkthrough_zoom").set_value(True).run()
+    assert not at_ex1.exception
+    at_ex1.toggle(key="walkthrough_fog").set_value(True).run()
+    assert not at_ex1.exception
+
+    # Open modal Pop-up for Eval #2, switch inside modal to Eval #3 and #1, then close
+    at_ex1.selectbox(key="walkthrough_algo").select("Adaptive Momentum Hill Climbing").run()
+    assert not at_ex1.exception
+    at_ex1.checkbox(key="walk_show_all_rows").set_value(True).run()
+    assert not at_ex1.exception
+    at_ex1.number_input(key="walk_popup_picker").set_value(2).run()
+    at_ex1.button(key="walk_open_picked_popup").click().run()
+    assert not at_ex1.exception
+    assert int(at_ex1.selectbox(key="walk_popup_eval").value) == 2
+    at_ex1.button(key="walk_pop_next").click().run()
+    assert not at_ex1.exception
+    assert int(at_ex1.selectbox(key="walk_popup_eval").value) == 3
+    at_ex1.selectbox(key="walk_popup_eval").select(1).run()
+    assert not at_ex1.exception
+    at_ex1.button(key="walk_pop_close").click().run()
+    assert not at_ex1.exception
+
+    # Exercise sequential range clamping in multi-eval browser
+    at_ex1.number_input(key="walk_multi_start").set_value(5).run()
+    assert not at_ex1.exception
+    assert int(at_ex1.number_input(key="walk_multi_end").value) >= 5
+
+    # Push walkthrough_step high, then lower sidebar max_evals -> must clamp cleanly without error
+    at_ex1.slider(key="walkthrough_step").set_value(120).run()
+    assert not at_ex1.exception
+    max_eval_slider = next(s for s in at_ex1.sidebar.slider if s.label == "Max objective evaluations")
+    max_eval_slider.set_value(20).run()
+    assert not at_ex1.exception
+    assert int(at_ex1.slider(key="walkthrough_step").value) <= 20
 
     at_ex1.sidebar.selectbox[0].select("sinusoidal").run()
     assert not at_ex1.exception

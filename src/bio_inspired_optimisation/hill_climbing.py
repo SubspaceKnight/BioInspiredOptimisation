@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -69,6 +69,25 @@ class EvaluationRecord:
     best_f: float
     step_size: float
     drift: np.ndarray | None = None
+    prev_x: np.ndarray | None = None
+    prev_f: float | None = None
+    step_size_before: float | None = None
+    offset: np.ndarray | None = None
+    delta: np.ndarray | None = None
+    m_before: np.ndarray | None = None
+    v_before: np.ndarray | None = None
+    t_mom_before: int = 0
+    m_hat: np.ndarray | None = None
+    v_hat: np.ndarray | None = None
+    d_norm: np.ndarray | None = None
+    m_after: np.ndarray | None = None
+    v_after: np.ndarray | None = None
+    t_mom_after: int = 0
+    accept_streak_before: int = 0
+    reject_streak_before: int = 0
+    accept_streak_after: int = 0
+    reject_streak_after: int = 0
+    step_event: str = ""
 
 
 @dataclass
@@ -85,6 +104,7 @@ class OptimizationResult:
     accepted_count: int
     stop_reason: str
     history: list[EvaluationRecord]
+    params: dict[str, Any] = field(default_factory=dict)
 
     def accepted_points(self, up_to_eval: int | None = None) -> np.ndarray:
         """Return array of accepted positions shape (k, dim) up to `up_to_eval`."""
@@ -167,6 +187,8 @@ def simple_hill_climbing(
     f_curr = tracker(x_curr)
     x_init = x_curr.copy()
     f_init = f_curr
+    dim = x_curr.size
+    sigma = float(step_size)
 
     history: list[EvaluationRecord] = [
         EvaluationRecord(
@@ -177,14 +199,26 @@ def simple_hill_climbing(
             accepted=True,
             best_x=x_curr.copy(),
             best_f=f_curr,
-            step_size=float(step_size),
+            step_size=sigma,
             drift=None,
+            prev_x=x_curr.copy(),
+            prev_f=f_curr,
+            step_size_before=sigma,
+            offset=np.zeros(dim, dtype=float),
+            delta=None,
+            accept_streak_before=0,
+            reject_streak_before=0,
+            accept_streak_after=0,
+            reject_streak_after=0,
+            step_event="Init",
         )
     ]
 
     iter_count = 0
     no_improve_count = 0
     accepted_count = 1
+    accept_streak = 0
+    reject_streak = 0
 
     while True:
         reason = termination.check(
@@ -192,7 +226,7 @@ def simple_hill_climbing(
             iter_count=iter_count,
             no_improve_count=no_improve_count,
             best_f=f_curr,
-            current_step_size=float(step_size),
+            current_step_size=sigma,
             minimize=minimize,
         )
         if reason is not None:
@@ -200,18 +234,32 @@ def simple_hill_climbing(
             break
 
         iter_count += 1
-        x_new = neighborhood_fn(x_curr, float(step_size), gen, bounds=bounds)
+        prev_x = x_curr.copy()
+        prev_f = f_curr
+        acc_before = accept_streak
+        rej_before = reject_streak
+
+        x_new = neighborhood_fn(prev_x, sigma, gen, bounds=bounds)
+        offset = x_new - prev_x
         f_new = tracker(x_new)
 
         if _is_better(f_new, f_curr, minimize=minimize):
+            delta = x_new - prev_x
             x_curr = x_new.copy()
             f_curr = f_new
             accepted = True
             accepted_count += 1
             no_improve_count = 0
+            accept_streak += 1
+            reject_streak = 0
+            event = "Accept"
         else:
+            delta = None
             accepted = False
             no_improve_count += 1
+            accept_streak = 0
+            reject_streak += 1
+            event = "Reject"
 
         history.append(
             EvaluationRecord(
@@ -222,8 +270,18 @@ def simple_hill_climbing(
                 accepted=accepted,
                 best_x=x_curr.copy(),
                 best_f=f_curr,
-                step_size=float(step_size),
+                step_size=sigma,
                 drift=None,
+                prev_x=prev_x,
+                prev_f=prev_f,
+                step_size_before=sigma,
+                offset=offset,
+                delta=delta,
+                accept_streak_before=acc_before,
+                reject_streak_before=rej_before,
+                accept_streak_after=accept_streak,
+                reject_streak_after=reject_streak,
+                step_event=event,
             )
         )
 
@@ -238,6 +296,13 @@ def simple_hill_climbing(
         accepted_count=accepted_count,
         stop_reason=stop_reason,
         history=history,
+        params={
+            "step_size": sigma,
+            "minimize": minimize,
+            "seed": seed,
+            "max_evals": termination.max_evals,
+            "max_no_improve": termination.max_no_improve,
+        },
     )
 
 
@@ -316,6 +381,25 @@ def adaptive_momentum_hill_climbing(
             best_f=f_curr,
             step_size=sigma,
             drift=np.zeros(dim, dtype=float),
+            prev_x=x_curr.copy(),
+            prev_f=f_curr,
+            step_size_before=sigma,
+            offset=np.zeros(dim, dtype=float),
+            delta=None,
+            m_before=np.zeros(dim, dtype=float),
+            v_before=np.zeros(dim, dtype=float),
+            t_mom_before=0,
+            m_hat=np.zeros(dim, dtype=float),
+            v_hat=np.zeros(dim, dtype=float),
+            d_norm=np.zeros(dim, dtype=float),
+            m_after=np.zeros(dim, dtype=float),
+            v_after=np.zeros(dim, dtype=float),
+            t_mom_after=0,
+            accept_streak_before=0,
+            reject_streak_before=0,
+            accept_streak_after=0,
+            reject_streak_after=0,
+            step_event="Init",
         )
     ]
 
@@ -339,28 +423,40 @@ def adaptive_momentum_hill_climbing(
             break
 
         iter_count += 1
+        prev_x = x_curr.copy()
+        prev_f = f_curr
+        sigma_before = sigma
+        m_before = m.copy()
+        v_before = v.copy()
+        t_mom_before = t_mom
+        acc_before = accept_streak
+        rej_before = reject_streak
 
         if t_mom > 0 and momentum_gain > 0.0:
-            m_hat = m / (1.0 - beta1**t_mom) if beta1 > 0.0 else m
-            v_hat = v / (1.0 - beta2**t_mom) if beta2 > 0.0 else v
+            m_hat = m / (1.0 - beta1**t_mom) if beta1 > 0.0 else m.copy()
+            v_hat = v / (1.0 - beta2**t_mom) if beta2 > 0.0 else v.copy()
             normalized_dir = np.clip(m_hat / (np.sqrt(v_hat) + eps), -1.0, 1.0)
             drift = momentum_gain * sigma * normalized_dir
         else:
+            m_hat = np.zeros(dim, dtype=float)
+            v_hat = np.zeros(dim, dtype=float)
+            normalized_dir = np.zeros(dim, dtype=float)
             drift = np.zeros(dim, dtype=float)
 
         x_new = _propose_candidate(
             neighborhood_fn=neighborhood_fn,
             has_bias_param=has_bias_param,
-            x=x_curr,
+            x=prev_x,
             step_size=sigma,
             rng=gen,
             bounds=bounds,
             drift=drift,
         )
+        offset = x_new - (prev_x + drift)
         f_new = tracker(x_new)
 
         if _is_better(f_new, f_curr, minimize=minimize):
-            delta = x_new - x_curr
+            delta = x_new - prev_x
             x_curr = x_new.copy()
             f_curr = f_new
             accepted = True
@@ -373,20 +469,25 @@ def adaptive_momentum_hill_climbing(
 
             accept_streak += 1
             reject_streak = 0
+            event = "Accept"
             if accept_streak >= accept_streak_to_grow:
                 sigma *= grow_factor
                 if upper_sigma is not None:
                     sigma = min(sigma, upper_sigma)
                 accept_streak = 0
+                event = "Accept (Grow σ)"
         else:
+            delta = None
             accepted = False
             no_improve_count += 1
             accept_streak = 0
             reject_streak += 1
             m = reject_momentum_decay * m
+            event = "Reject"
             if reject_streak >= reject_streak_to_shrink:
                 sigma = max(min_step_size, sigma * shrink_factor)
                 reject_streak = 0
+                event = "Reject (Shrink σ)"
 
         history.append(
             EvaluationRecord(
@@ -399,6 +500,25 @@ def adaptive_momentum_hill_climbing(
                 best_f=f_curr,
                 step_size=sigma,
                 drift=drift.copy(),
+                prev_x=prev_x,
+                prev_f=prev_f,
+                step_size_before=sigma_before,
+                offset=offset,
+                delta=delta,
+                m_before=m_before,
+                v_before=v_before,
+                t_mom_before=t_mom_before,
+                m_hat=m_hat.copy(),
+                v_hat=v_hat.copy(),
+                d_norm=normalized_dir.copy(),
+                m_after=m.copy(),
+                v_after=v.copy(),
+                t_mom_after=t_mom,
+                accept_streak_before=acc_before,
+                reject_streak_before=rej_before,
+                accept_streak_after=accept_streak,
+                reject_streak_after=reject_streak,
+                step_event=event,
             )
         )
 
@@ -413,4 +533,22 @@ def adaptive_momentum_hill_climbing(
         accepted_count=accepted_count,
         stop_reason=stop_reason,
         history=history,
+        params={
+            "initial_step_size": float(initial_step_size),
+            "beta1": beta1,
+            "beta2": beta2,
+            "momentum_gain": momentum_gain,
+            "reject_momentum_decay": reject_momentum_decay,
+            "grow_factor": grow_factor,
+            "shrink_factor": shrink_factor,
+            "accept_streak_to_grow": accept_streak_to_grow,
+            "reject_streak_to_shrink": reject_streak_to_shrink,
+            "min_step_size": min_step_size,
+            "max_step_size": upper_sigma,
+            "eps": eps,
+            "minimize": minimize,
+            "seed": seed,
+            "max_evals": termination.max_evals,
+            "max_no_improve": termination.max_no_improve,
+        },
     )
