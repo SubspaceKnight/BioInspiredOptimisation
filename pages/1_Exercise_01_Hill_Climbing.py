@@ -741,50 +741,78 @@ tab_intro, tab_methods, tab_results, tab_discussion, tab_walkthrough = st.tabs(
 # ============================ 1. INTRODUCTION ==============================
 with tab_intro:
     st.header("1. Introduction")
+
     st.markdown(
-        """
-**Hill Climbing** is one of the simplest single-solution **local search** metaheuristics in
-bio-inspired and black-box optimization. Starting from a single initial candidate
-$\\vec{x}_0 \\in \\mathbb{R}^n$, the algorithm repeatedly probes a nearby candidate
-$\\vec{x}_{\\text{new}} \\in N(\\vec{x}_{\\text{old}})$ and moves only when the candidate strictly improves
-the objective value.
+        r"""
+**Hill Climbing** is a simple, derivative-free **local search algorithm**
+used to find good solutions to optimization problems.
+
+Starting from an initial solution $\vec{x}_0 \in \mathbb{R}^n$,
+the algorithm repeatedly generates a random neighbor and evaluates its fitness.
+
+**Basic idea:**
+- Start with an initial solution $\vec{x}_0$.
+- Generate a new candidate from its neighborhood.
+- Evaluate the objective function.
+- Accept the candidate if it improves the current solution.
+- Repeat until a termination criterion is reached.
 
 ### Minimization vs. Maximization
-Historically, the name *"Hill Climbing"* comes from maximizing a fitness or reward surface
-($f(\\vec{x}_{\\text{new}}) > f(\\vec{x}_{\\text{old}})$). For benchmark **minimization** tasks
-(finding valleys rather than peaks), the exact same mechanism applies with a reversed comparison:
-$$f(\\vec{x}_{\\text{new}}) < f(\\vec{x}_{\\text{old}})$$
 
-### Zero-Order (Hill Climbing) vs. Gradient-Based Methods (Adam / GD)
-Unlike gradient-based optimization methods commonly used in machine learning, standard
-Hill Climbing does not compute derivatives $\\nabla f(\\vec{x})$:
+Hill Climbing originally describes moving uphill to maximize a fitness function.
+
+- **Maximization:** Accept a candidate if its fitness is higher:
+
+  $$
+  f(\vec{x}_{new}) > f(\vec{x}_{curr})
+  $$
+
+- **Minimization:** Accept a candidate if its fitness is lower:
+
+  $$
+  f(\vec{x}_{new}) < f(\vec{x}_{curr})
+  $$
+
+In this exercise, we **minimize** all benchmark functions.
+
+### Zero-Order vs. Gradient-Based Optimization
+
+Hill Climbing is a **zero-order optimization method**:
+it only evaluates function values and does not calculate derivatives.
 
 | Property | Hill Climbing (Zero-Order) | Gradient Descent / Adam (First-Order) | Newton's Method (Second-Order) |
 | :--- | :--- | :--- | :--- |
-| **Information queried** | Function values $f(\\vec{x})$ only (black-box) | Values + gradient $\\nabla f(\\vec{x})$ | Gradient + Hessian $\\nabla^2 f(\\vec{x})$ |
-| **How next step is chosen** | Sample neighbor $\\vec{x} + \\Delta\\vec{x}$ and test $f$ | Step along $-\\alpha\\,\\nabla f(\\vec{x})$ (with moments in Adam) | Solve $\\vec{x}_{t+1} = \\vec{x}_t - H^{-1}\\nabla f(\\vec{x}_t)$ |
-| **Can jump straight to $\\nabla f = 0$?** | No (gradient is unknown) | No (nonlinear landscapes have many local roots & saddles) | Only locally; $O(n^3)$ cost and can jump to maxima |
-| **Works on non-differentiable / noisy $f$?** | **Yes** | Not without surrogates / smoothing | No |
+| **Information used** | Function values $f(\vec{x})$ | Gradients $\nabla f(\vec{x})$ | Gradient and Hessian $\nabla^2 f(\vec{x})$ |
+| **Search direction** | Random neighbors | Negative gradient direction | Direction calculated using the Hessian |
+| **Requires derivatives?** | No | First derivatives | First and second derivatives |
+| **Main limitation** | Can get trapped in local minima | Depends on learning rate and local landscape | Computationally expensive; may converge to non-minima |
+
+**Our implementations:**
+- **Simple Hill Climbing:** Random search with a fixed neighborhood size.
+- **Adaptive Momentum Hill Climbing:** Uses previous successful movements and an adaptive step size.
+
+Both methods remain **derivative-free**, even though Adaptive Momentum
+uses concepts inspired by Adam.
 
 ### Pseudocode: Simple Hill Climbing (Minimization)
-```text
-input: initial_solution x0, objective_fn f, neighborhood_fn N, termination
-x_curr <- x0
-f_curr <- f(x_curr)        # eval_count = 1
-while not termination.reached():
-    x_new <- N(x_curr)
-    f_new <- f(x_new)      # eval_count += 1
-    if f_new < f_curr:
-        x_curr <- x_new
-        f_curr <- f_new
-return x_curr, f_curr
-```
 
-### Complexity, Strengths, and Weaknesses
-- **Space complexity:** $O(n)$ — stores only the current best candidate vector (plus optional small moment vectors $O(n)$ in our adaptive variant).
-- **Time complexity:** $O(E \\cdot (n + C_f))$ where $E$ is the number of objective evaluations and $C_f$ is the cost of evaluating $f(\\vec{x})$. Because $C_f$ dominates in practice, **evaluation count** is the primary runtime and efficiency metric.
-- **Strengths:** Simple to implement, $O(n)$ memory footprint, requires no derivatives or differentiability assumptions, and achieves monotonic improvement within a single unimodal basin.
-- **Weaknesses:** Purely greedy (never accepts worse solutions) $\\implies$ **gets trapped in local minima**, stalls on **flat plateaus**, struggles along **narrow curved ridges**, and fixed step sizes trade off global reach against local precision.
+```text
+Input: initial solution x0, objective function f,
+       neighborhood function N, termination criterion
+
+x_curr = x0
+f_curr = f(x_curr)
+
+while not termination.reached():
+
+    x_new = N(x_curr)
+    f_new = f(x_new)
+
+    if f_new < f_curr:
+        x_curr = x_new
+        f_curr = f_new
+
+return x_curr, f_curr
 """
     )
 
@@ -792,48 +820,234 @@ return x_curr, f_curr
 with tab_methods:
     st.header("2. Methods")
     st.markdown(
-        """
+    r"""
 ### Reusable Software Architecture
-To allow reuse in upcoming exercises, the optimization core is decoupled from the Streamlit UI inside
-`src/bio_inspired_optimisation/`:
-- **`benchmarks.py`:** Implements $n$-dimensional benchmark objectives (`quadratic`, `sinusoidal`, `ackley`) with domain specs.
-- **`neighborhoods.py`:** Continuous perturbation factories (`Uniform Box`, `Uniform L2 Ball`, `Gaussian`) with configurable boundary handling (`clip` or mirror `reflect`).
-- **`termination.py`:** Unified `TerminationCriterion` supporting `max_evals`, `max_iters`, `max_no_improve` (patience), `min_step_size`, and `target_fitness`.
-- **`hill_climbing.py`:** Solver functions taking `(initial_solution, objective_fn, neighborhood_fn, termination, ...)` and logging every single probe through `TrackedObjective` so `eval_count` is exact.
 
-### Benchmark Functions Implemented
-1. **Quadratic (1D):** $f(x) = x^2$ on $[-10, 10]$, global minimum $x^* = 0, f(x^*) = 0$.
-2. **Sinusoidal (1D):** $f(x) = \\sin(x)$ on $[-2\\pi, 2\\pi]$, minima at $x^* = -\\pi/2 + 2\\pi k, f(x^*) = -1$.
-3. **Ackley (2D):**
-   $$f(\\vec{x}) = -20\\exp\\!\\left(-0.2\\sqrt{\\frac{1}{n}\\sum_{i=1}^n x_i^2}\\right) - \\exp\\!\\left(\\frac{1}{n}\\sum_{i=1}^n \\cos(2\\pi x_i)\\right) + 20 + e$$
-   evaluated on $[-10\\pi, 10\\pi]^2$ (correcting the missing minus sign on the lower bound in the assignment footnote), global minimum $\\vec{x}^* = (0, 0), f(\\vec{x}^*) = 0$.
+The optimization algorithms are separated from the Streamlit interface
+to allow reuse in future exercises.
+
+The main components are located in `src/bio_inspired_optimisation/`:
+
+- **`benchmarks.py`:** Implements the benchmark functions (Quadratic, Sinusoidal, Ackley) and stores their properties.
+- **`neighborhoods.py`:** Generates random neighbors using `Uniform Box`, `Uniform L2 Ball`, or `Gaussian` distributions. Supports boundary handling with `clip` or `reflect`.
+- **`termination.py`:** Defines stopping criteria such as `max_evals`, `max_iters`, `max_no_improve`, `min_step_size`, and `target_fitness`.
+- **`hill_climbing.py`:** Implements both Hill Climbing algorithms. Uses `TrackedObjective` to count every function evaluation.
+- **`experiments.py`:** Runs single and multiple experiments to compare the algorithms.
+- **`plotting.py`:** Creates visualizations of the function landscape, search trajectory, and convergence.
+
+---
+
+### Benchmark Functions
+
+We use three benchmark functions with different optimization landscapes:
+
+- **Quadratic (1D):** A convex function with one global minimum.
+
+  $$
+  f(x)=x^2
+  $$
+
+  Domain: $[-10,10]$  
+  Global minimum: $x^*=0,\quad f(x^*)=0$
+
+- **Sinusoidal (1D):** A periodic function with multiple global minima.
+
+  $$
+  f(x)=\sin(x)
+  $$
+
+  Domain: $[-2\pi,2\pi]$  
+  Global minima: $x^*=-\frac{\pi}{2}+2\pi k,\quad f(x^*)=-1$
+
+- **Ackley (2D):** A multimodal function with many local minima.
+
+  $$
+  f(\vec{x}) =
+  -20\exp\left(
+  -0.2\sqrt{\frac{1}{n}\sum_{i=1}^{n}x_i^2}
+  \right)
+  -\exp\left(
+  \frac{1}{n}\sum_{i=1}^{n}\cos(2\pi x_i)
+  \right)
+  +20+e
+  $$
+
+  Domain: $[-10\pi,10\pi]^2$ with $n=2$  
+  Global minimum: $\vec{x}^*=(0,0),\quad f(\vec{x}^*)=0$
+
+---
 
 ### Algorithms & Critical Design Choices
 
-#### 1. Simple Hill Climbing (`simple_hill_climbing`)
-Because a continuous neighborhood $B_\\sigma(\\vec{x}) \\subset \\mathbb{R}^n$ contains infinitely many points, Simple Hill Climbing samples **one** neighbor per iteration around $\\vec{x}_{\\text{curr}}$ with fixed radius $\\sigma_0$ and accepts immediately if $f(\\vec{x}_{\\text{new}}) < f(\\vec{x}_{\\text{curr}})$.
-- **Pros:** Minimal evaluations per iteration (1), unbiased isotropic exploration, easy to tune ($\\sigma_0$ only).
-- **Cons:** Fixed $\\sigma_0$ cannot simultaneously traverse wide domains fast *and* refine minima to high precision; wastes many evaluations bouncing around once $|\\vec{x} - \\vec{x}^*| < \\sigma_0$.
+#### Simple Hill Climbing (`simple_hill_climbing`)
 
-#### 2. Adaptive Momentum Hill Climbing (`adaptive_momentum_hill_climbing`)
-Analogous to **Adam** in maintaining first and second moment estimates, this variant remains strictly derivative-free and relies solely on function evaluations. Instead of gradients, it tracks accepted step displacements $\\vec{\\delta}_t = \\vec{x}_{\\text{new}} - \\vec{x}_{\\text{curr}}$:
-- **First & Second Moments on Accepted Steps:**
-  $$\\vec{m}_t = \\beta_1\\vec{m}_{t-1} + (1-\\beta_1)\\vec{\\delta}_t, \\qquad \\vec{v}_t = \\beta_2\\vec{v}_{t-1} + (1-\\beta_2)\\vec{\\delta}_t^2$$
-  with bias corrections $\\hat{\\vec{m}}_t = \\vec{m}_t / (1-\\beta_1^t)$ and $\\hat{\\vec{v}}_t = \\vec{v}_t / (1-\\beta_2^t)$.
-- **Momentum-Biased Proposal Center:**
-  $$\\vec{\\text{drift}}_t = \\eta_{\\text{mom}}\\cdot \\sigma_t \\cdot \\operatorname{clip}\\!\\left(\\frac{\\hat{\\vec{m}}_t}{\\sqrt{\\hat{\\vec{v}}_t} + \\varepsilon}, -1, 1\\right), \\qquad \\vec{x}_{\\text{new}} = \\vec{x}_{\\text{curr}} + \\vec{\\text{drift}}_t + \\vec{\\epsilon}_t, \\quad \\vec{\\epsilon}_t \\sim N_{\\sigma_t}(\\vec{0})$$
-  Scaling drift by $\\sigma_t$ ensures directional momentum shrinks proportionally as the search zooms into a minimum. On rejected probes, $\\vec{m}$ is damped ($\\vec{m} \\leftarrow \\gamma_{\\text{reject}}\\vec{m}$) so the search does not keep pushing into uphill barriers.
-- **Streak-Based Step Adaptation ($\\sigma_t$):** Consecutive accepted moves expand $\\sigma_t \\leftarrow \\sigma_t \\cdot c_{\\text{grow}}$ to cross slopes/plateaus faster; consecutive rejections shrink $\\sigma_t \\leftarrow \\max(\\sigma_{\\min}, \\sigma_t \\cdot c_{\\text{shrink}})$ to zoom into fine minima.
-- **Pros:** Faster progress along consistent slopes due to directional bias and higher local precision near smooth optima via step-size decay.
-- **Cons:** More hyperparameters; if $\\sigma_t$ shrinks aggressively in a multimodal ripple (like outer Ackley), it can lock into a local trap earlier than a large fixed $\\sigma_0$.
+Simple Hill Climbing is a derivative-free local search algorithm.
+
+**How it works:**
+
+- Starts from an initial solution $\vec{x}_0$.
+- Samples **one random neighbor per iteration**.
+- Uses a fixed neighborhood scale $\sigma_0$.
+- Accepts a candidate only if it improves the objective function:
+
+$$
+f(\vec{x}_{new}) < f(\vec{x}_{curr})
+$$
+
+- Otherwise, the current solution remains unchanged.
+- Stops when a termination criterion is reached.
+
+**Pros:**
+- Simple implementation with few parameters.
+- Only one new function evaluation per iteration.
+- Random exploration without a preferred search direction.
+
+**Cons:**
+- Fixed $\sigma_0$ cannot automatically adapt to different search situations.
+- Large steps can cause many rejected candidates near a minimum.
+- Small steps can make global exploration slow.
+- Can get stuck in local minima.
+
+---
+
+#### Adaptive Momentum Hill Climbing (`adaptive_momentum_hill_climbing`)
+
+Adaptive Momentum Hill Climbing extends Simple Hill Climbing by
+remembering successful movements and automatically adjusting the step size.
+
+**Main ideas:**
+- **Derivative-free:** Uses function values instead of gradients.
+- **Momentum:** Uses previous successful steps to guide the search.
+- **Adaptive step size:** Changes the neighborhood size based on previous results.
+- **Adam-inspired:** Uses first and second moments, but tracks movements instead of gradients.
+
+**First Moment — Direction ($\beta_1$)**
+
+Stores a weighted average of successful movements:
+
+$$
+\vec{m}_t =
+\beta_1\vec{m}_{t-1}
++(1-\beta_1)\vec{\delta}_t
+$$
+
+where $\vec{\delta}_t=\vec{x}_{new}-\vec{x}_{curr}$ is an accepted step.
+
+- **Purpose:** Remembers successful search directions.
+- **High $\beta_1$:** Longer memory of previous directions.
+- **Low $\beta_1$:** More influence from the latest successful movement.
+
+**Second Moment — Step Magnitude ($\beta_2$)**
+
+Stores a weighted average of squared successful movements:
+
+$$
+\vec{v}_t =
+\beta_2\vec{v}_{t-1}
++(1-\beta_2)\vec{\delta}_t^2
+$$
+
+- **Purpose:** Tracks the typical size of successful movements.
+- **High $\beta_2$:** Longer memory of previous step magnitudes.
+- **Low $\beta_2$:** More influence from recent movements.
+- Helps normalize the momentum direction.
+
+**Bias Correction**
+
+Both moments start at zero, making their initial estimates too small.
+Bias correction compensates for this:
+
+$$
+\hat{\vec{m}}_t =
+\frac{\vec{m}_t}{1-\beta_1^t}
+\qquad
+\hat{\vec{v}}_t =
+\frac{\vec{v}_t}{1-\beta_2^t}
+$$
+
+Here, $t$ counts successful momentum updates.
+
+**Momentum Drift — Search Direction**
+
+The algorithm uses both moments to calculate a preferred search direction:
+
+$$
+\vec{d}_t =
+\eta_{mom}\cdot\sigma_t\cdot
+\operatorname{clip}
+\left(
+\frac{\hat{\vec{m}}_t}
+{\sqrt{\hat{\vec{v}}_t}+\varepsilon},
+-1,1
+\right)
+$$
+
+- **First moment:** Provides directional information.
+- **Second moment:** Normalizes the movement.
+- **Momentum gain ($\eta_{mom}$):** Controls the strength of the directional bias.
+- **Clip:** Limits each component to $[-1,1]$.
+- **$\sigma_t$:** Scales the drift according to the current step size.
+
+A new candidate is generated using:
+
+$$
+\vec{x}_{new} =
+\vec{x}_{curr}+\vec{d}_t+\vec{\epsilon}_t
+$$
+
+- $\vec{d}_t$ shifts the center of the random search.
+- $\vec{\epsilon}_t$ is a random movement from the selected neighborhood distribution.
+- Boundary handling keeps the candidate inside the domain.
+- Only improving candidates are accepted.
+- After rejection, the first moment is reduced to weaken the previous direction.
+
+**Adaptive Step Size ($\sigma_t$)**
+
+Unlike Simple HC, the adaptive algorithm changes its neighborhood size.
+
+- **Consecutive accepted steps:** Increase $\sigma_t$ to allow larger movements.
+
+  $$
+  \sigma_{new}=\sigma_t\cdot c_{grow}
+  $$
+
+- **Consecutive rejected steps:** Decrease $\sigma_t$ for more precise local search.
+
+  $$
+  \sigma_{new}=
+  \max(\sigma_{min},\sigma_t\cdot c_{shrink})
+  $$
+
+- `grow_factor` and `shrink_factor` control how much the step size changes.
+- `accept_streak_to_grow` and `reject_streak_to_shrink` determine when it changes.
+
+**Pros:**
+- Can move faster along successful search directions.
+- Automatically adjusts the neighborhood size.
+- Can achieve higher precision near a minimum.
+- Does not require gradients.
+
+**Cons:**
+- More hyperparameters than Simple HC.
+- Momentum can favor an unhelpful direction.
+- Step size may shrink too quickly and trap the algorithm in local minima.
+- No guarantee of finding the global minimum.
+
+---
 
 ### Fair Comparison Protocol
-- Both variants start from the exact same $\\vec{x}_0$, use the same RNG seed, neighborhood family, and domain bounds.
-- Every call to `objective_fn` (including initial $f(\\vec{x}_0)$) increments `eval_count` via `TrackedObjective`.
-- All convergence plots use **objective function evaluations** on the x-axis.
-"""
-    )
 
+To compare both algorithms fairly:
+
+- Both start from the **same initial solution** $\vec{x}_0$.
+- Both use the same random seed, neighborhood type, and domain bounds.
+- Both use the same termination criteria and evaluation budget.
+- Every function evaluation is counted using `TrackedObjective`, including the initial evaluation.
+
+The same seed ensures reproducibility, but the algorithms may generate
+different search trajectories because their search strategies differ.
+"""
+)
 # ============================== 3. RESULTS =================================
 with tab_results:
     st.header("3. Results — Interactive Lab & Fog of War")
@@ -1041,37 +1255,163 @@ with tab_discussion:
     st.header("4. Discussion")
 
     st.markdown(
-        """
-### Expected vs. Unexpected Findings
+        r"""
+### Expected Results & Observations
 
-1. **Quadratic 1D ($f(x) = x^2$) — Unimodal Precision vs. Resolution Floor**
-   - **Expected:** Both Simple Hill Climbing and Adaptive Momentum Hill Climbing reliably find the basin around $x^* = 0$ because the landscape has no local minima.
-   - **Key contrast:** Fixed-step Simple HC descends roughly linearly and then hits a **step-size floor** — once $|x| < \\sigma_0$, most random probes overshoot $0$ or land worse, stalling precision around $O(\\sigma_0^2)$. Adaptive Momentum HC accelerates downhill via momentum drift $\\vec{m}_t$ and step growth, then rapidly shrinks $\\sigma_t$ upon overshooting to achieve several orders of magnitude finer precision (down toward $\\sigma_{\\min}$) within the same evaluation budget.
+#### 1. Quadratic (1D) — Convergence and Precision
 
-2. **Sinusoidal 1D ($f(x) = \\sin(x)$) — Basin Selection & Boundary Traps**
-   - **Expected:** Starting near $-\\pi/2$ or $+3\\pi/2$ converges cleanly to $f^* = -1$. Starting outside the crests ($x_0 < -3\\pi/2$ or $x_0 > \\pi/2$ when bounded to $[-2\\pi, 2\\pi]$) can push Simple HC toward a domain **boundary trap** ($x = \\pm 2\\pi, f = 0$) if $\\sigma_0$ is smaller than the barrier width.
-   - **Fog of War insight:** Enabling Fog of War illustrates why: from inside a basin, every rejected probe outside the current downhill side returns a higher value, providing no signal that a deeper valley lies beyond the ridge.
+$$
+f(x) = x^2
+$$
 
-3. **Ackley 2D — Flat Outer Plateau & Local Cosine Ripples (Trade-off)**
-   - **Expected:** On $[-10\\pi, 10\\pi]^2$, starting far from the origin places both algorithms on Ackley's nearly flat outer plateau covered in periodic cosine ripples ($\\cos(c x_i)$ has spatial period $1$ when $c = 2\\pi$).
-   - **Unexpected / Notable Finding:** **Adaptive step-size shrinking introduces a trade-off on multimodal functions.**
-     - *Advantage:* Inside the central funnel $[-5, 5]^2$, Adaptive Momentum HC converges toward $(0, 0)$ with substantially higher final precision than fixed-step Simple HC.
-     - *Pitfall:* When starting far out on Ackley with small/medium $\\sigma_0$ and encountering consecutive rejected probes inside a shallow outer cosine ripple, shrinking $\\sigma_t$ prematurely traps Adaptive HC inside that local crater — whereas Simple HC with a constant $\\sigma_0 > 1.0$ retains enough step reach to occasionally step across adjacent cosine basins. This explains why tuning `momentum_gain`, `reject_streak_to_shrink`, and `grow_factor` noticeably affects Ackley success rates.
+**Expected behavior:**
+- Both algorithms should approach the global minimum at $x^*=0$.
+- The function has only one minimum and no other local minima.
+- Simple HC uses a fixed neighborhood size $\sigma_0$.
+- Adaptive HC can adjust its step size to improve local precision.
 
-### Parameter Dependency Summary
-| Parameter | Effect when too small | Effect when too large |
+**Key observations:**
+- Simple HC often makes fast progress at first but slows down near the minimum.
+- With a fixed $\sigma_0$, many random candidates may become worse than the current solution.
+- Adaptive HC can reduce $\sigma_t$ after repeated rejections, allowing smaller search steps.
+- However, a smaller step size does not always guarantee better results.
+
+---
+
+#### 2. Sinusoidal (1D) — Starting Point and Boundaries
+
+$$
+f(x)=\sin(x)
+$$
+
+**Expected behavior:**
+- The function has multiple global minima:
+
+  $$
+  x^*=-\frac{\pi}{2}+2\pi k
+  $$
+
+- All global minima have the same fitness $f(x^*)=-1$.
+- The starting point influences which minimum is reached.
+
+**Key observations:**
+- Both algorithms can reach different minima depending on $\vec{x}_0$.
+- Search boundaries can prevent movement toward better solutions.
+- Larger random steps may allow movement between different regions.
+- Small steps tend to keep the search within the current valley.
+
+---
+
+#### 3. Ackley (2D) — Local Minima and Exploration
+
+Ackley is the most difficult benchmark because it contains many local minima.
+
+**Expected behavior:**
+- The global minimum is at $(0,0)$ with $f(x^*)=0$.
+- The outer region is relatively flat and contains periodic variations.
+- Both algorithms may struggle to reach the global minimum.
+
+**Key observations:**
+
+**Simple HC:**
+- Keeps a constant neighborhood size.
+- Larger steps may help reach other valleys.
+- Small steps may lead to slow progress or local trapping.
+
+**Adaptive Momentum HC:**
+- Uses previous successful movements to guide the search.
+- Can increase the step size during successful exploration.
+- Can reduce the step size for more precise local search.
+- May get trapped if the step size becomes too small too early.
+
+**Main trade-off:**
+- Adaptive HC can provide better local precision.
+- Simple HC may maintain better exploration with a sufficiently large fixed step size.
+- Neither algorithm is guaranteed to find the global minimum.
+
+---
+
+### Parameter Dependency
+
+The performance of both algorithms strongly depends on their parameters.
+
+| Parameter | Small Value | Large Value |
 | :--- | :--- | :--- |
-| **Initial step size $\\sigma_0$** | Slow progress across slopes; easily trapped in tiny local ripples | Skips over narrow basins/minima; low acceptance rate near optimum |
-| **Initial point $\\vec{x}_0$** | Determines the basin of attraction completely for single-trajectory HC | — |
-| **Momentum gain / $\\beta_1$** | No directional memory; slower along smooth corridors | Can overshoot curved valleys or push repeatedly into barriers before damping |
-| **Shrink rate / patience** | Fails to refine final decimal digits within `max_evals` | Collapses $\\sigma_t$ prematurely inside outer local minima on Ackley |
+| **Step size $\sigma_0$** | Small movements, slower exploration | Larger movements, more rejected candidates near minima |
+| **Momentum gain** | Weak directional bias | Strong influence of previous directions |
+| **$\beta_1$** | Focus on recent successful directions | Longer memory of previous directions |
+| **$\beta_2$** | Reacts quickly to recent step magnitudes | Smoother estimate of step magnitudes |
+| **Grow factor** | Little step-size increase | Faster step-size growth |
+| **Shrink factor** | Fast reduction of $\sigma_t$ | Slow reduction of $\sigma_t$ |
+| **Reject patience** | Step size shrinks after few rejections | More rejections required before shrinking |
+
+**Initial position $\vec{x}_0$:**
+- The starting point strongly influences the final result.
+- Different starting points can lead to different local minima.
+- This effect is especially important for Ackley.
+
+---
+
+### Efficiency and Reliability
+
+The algorithms are compared using the same starting points,
+neighborhood distributions, domain bounds, and evaluation budgets.
+
+**Important metrics:**
+- **Best fitness:** Quality of the final solution.
+- **Optimality gap:** Distance between the best fitness and the global minimum value.
+- **Function evaluations:** Computational effort.
+- **Success rate:** Percentage of runs reaching the target tolerance.
+- **Standard deviation:** Variation between different runs.
+
+**Multi-start analysis:**
+- Tests both algorithms from multiple random starting points.
+- Helps determine how strongly results depend on initialization.
+- A higher success rate does not always mean a better average fitness.
+- Adaptive HC is not necessarily better than Simple HC in every situation.
+
+---
 
 ### Limitations & Possible Improvements
-1. **No mechanism to escape local optima:** Strictly monotonic acceptance ($f_{\\text{new}} < f_{\\text{curr}}$) guarantees trapping in the first local minimum whose barrier exceeds $\\sigma$.
-   - *Possible extension:* **Random-Restart Hill Climbing** (restart from multiple random $\\vec{x}_0$ within the evaluation budget) or **Simulated Annealing** (accept worse moves with probability $e^{-\\Delta f / T}$).
-2. **Isotropic sampling ignores ridge curvature:** In higher dimensions or elongated valleys, isotropic perturbations frequently step uphill across steep valley walls.
-   - *Possible extension:* Covariance adaptation (**CMA-ES** or **(1+1)-ES with covariance**) or **Tabu Search** memory to avoid revisiting rejected regions.
-3. **Budget-aware exploration schedule:** Keeping a larger exploration $\\sigma$ early (or combining global Latin Hypercube or Sobol initial sampling with Adaptive Momentum local refinement) can substantially improve Ackley global success rate.
+
+**1. Local Minima**
+- Both algorithms accept only improving candidates.
+- They may become trapped in local minima.
+- Large random jumps can sometimes reach better regions.
+
+**Possible improvements:**
+- **Random Restart:** Run Hill Climbing from multiple starting points.
+- **Simulated Annealing:** Occasionally accept worse solutions to escape local minima.
+
+**2. Neighborhood Selection**
+- Random movements do not directly use information about the function's curvature.
+- The neighborhood distribution influences exploration and precision.
+- Finding a suitable step size can be difficult.
+
+**Possible improvements:**
+- Adaptive neighborhood distributions.
+- Covariance adaptation to improve search directions.
+
+**3. Exploration vs. Exploitation**
+- Large steps support exploration of the search space.
+- Small steps support precise local optimization.
+- Balancing both is important, especially for multimodal functions.
+
+**Possible improvements:**
+- Use larger steps early in the optimization.
+- Reduce step sizes when approaching promising solutions.
+- Combine multiple starting points with local refinement.
+
+---
+
+### Conclusion
+
+- **Simple Hill Climbing** is easy to implement and provides a useful baseline.
+- **Adaptive Momentum Hill Climbing** adds directional memory and adaptive step sizes.
+- Adaptive HC can improve convergence speed and local precision.
+- However, its additional parameters can also lead to premature local trapping.
+- The best algorithm depends on the benchmark function, starting point, and parameter settings.
+- Multiple runs are necessary for a reliable comparison.
 """
     )
 
