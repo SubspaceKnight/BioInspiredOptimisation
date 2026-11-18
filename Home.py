@@ -1,60 +1,117 @@
-"""Main entry page for the Bio-Inspired Optimisation multipage Streamlit app."""
+"""Landing page for the Bio-Inspired Optimisation exercise portfolio."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import streamlit as st
 
 from bio_inspired_optimisation.benchmarks import BENCHMARKS
 
 st.set_page_config(
-    page_title="Bio-Inspired Optimisation",
+    page_title="Bio-Inspired Optimisation | Portfolio",
     page_icon="🧬",
     layout="wide",
 )
 
-st.title("Bio-Inspired Optimisation — Exercise Portfolio")
-st.caption("FH JOANNEUM · Interactive Theory, Implementation & Experimental Analysis")
+ROOT = Path(__file__).resolve().parent
+HC_PAGE = "pages/1_Exercise_01_Hill_Climbing.py"
+GA_PAGE = "pages/2_Exercise_02_Genetic_Algorithms.py"
 
+st.title("🧬 Bio-Inspired Optimisation")
+st.caption("FH JOANNEUM · Data Science & Artificial Intelligence · Winter Term 2026/27")
 st.markdown(
     """
-Welcome to the **Bio-Inspired Optimisation** interactive documentation and laboratory.
-This repository uses `uv` for reproducible package management and Streamlit's `pages/`
-multipage architecture so new exercises can be added cleanly throughout the semester.
+An interactive portfolio for **derivative-free optimisation**. Explore the theory,
+change algorithm parameters, run experiments, and compare the results.
+
+Each exercise includes **Introduction, Methods, Results, and Discussion**.
 """
 )
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Current Exercise", "Exercise 1: Hill Climbing")
-col2.metric("Optimisation Mode", "Minimization (f_new < f_old)")
-col3.metric("Benchmarks Implemented", f"{len(BENCHMARKS)} (1D & 2D)")
+metric_a, metric_b, metric_c = st.columns(3)
+metric_a.metric("Exercises", "2")
+metric_b.metric("Optimisation approaches", "Local + Evolutionary")
+metric_c.metric("Hill Climbing benchmarks", str(len(BENCHMARKS)))
 
 st.divider()
+st.header("Choose an exercise")
 
-st.subheader("Exercises")
+left, right = st.columns(2, gap="large")
+
+with left:
+    with st.container(border=True):
+        st.subheader("⛰️ Exercise 01 · Hill Climbing")
+        st.caption("Single-solution search · Continuous optimisation")
+        st.markdown(
+            """
+**Goal:** Find the minimum of different benchmark functions.
+
+- **Algorithms:** Simple HC and Adaptive Momentum HC
+- **Functions:** Quadratic, Sinusoidal, and Ackley
+- **Explore:** Neighbourhoods, step size, momentum, and termination
+- **Results:** Trajectories, convergence, and paired multi-start comparisons
+- **Interactive:** Step-by-step dynamics and Fog of War
+"""
+        )
+        if (ROOT / HC_PAGE).is_file():
+            st.page_link(HC_PAGE, label="Open Exercise 01", icon="➡️", use_container_width=True)
+        else:
+            st.warning("Exercise 01 page not found in the pages/ folder.")
+
+with right:
+    with st.container(border=True):
+        st.subheader("🧬 Exercise 02 · Genetic Algorithms")
+        st.caption("Population-based search · Image reconstruction")
+        st.markdown(
+            """
+**Goal:** Reconstruct a grayscale image by evolving candidate images.
+
+- **Representation:** One pixel intensity per gene
+- **Fitness:** Normalised mean squared error (MSE)
+- **Explore:** Initialisation, parent selection, crossover, and mutation
+- **Results:** Image evolution, fitness curves, diversity, and runtime
+- **Interactive:** Generation replay and operator comparisons
+"""
+        )
+        if (ROOT / GA_PAGE).is_file():
+            st.page_link(GA_PAGE, label="Open Exercise 02", icon="➡️", use_container_width=True)
+        else:
+            st.warning("Exercise 02 page not found in the pages/ folder.")
+
+st.divider()
+st.subheader("How the exercises differ")
 st.markdown(
     """
-- **Exercise 1 — Hill Climbing** *(open from the left sidebar)*
-  - **1. Introduction:** Derivative-free local search theory, minimization vs. maximization, zero-order vs. gradient-based methods (Adam/GD), and complexity.
-  - **2. Methods:** Reusable solver design (`x0`, `objective_fn`, `neighborhood_fn`, `termination`), exact evaluation counting, and **Simple HC** vs. **Adaptive Momentum HC** (Adam-inspired first/second moments over successful steps).
-  - **3. Results:** Interactive trajectory plots (1D line, 2D contour, 3D surface), adjustable step size/neighborhood/bounds, **Fog of War** black-box probe view with step-by-step replay slider, and paired multi-start statistics.
-  - **4. Discussion:** Empirical takeaways on convergence speed, precision, local-minimum trapping, parameter sensitivity, and limitations.
-  - **5. Step-by-Step Dynamics:** Interactive single-evaluation walkthrough with live substituted equations, search windows/vectors, streaks (`accept_streak` / `reject_streak`), and variable transitions (`drift`, `offset ε`, `m`, `v`, `σ`).
+| | Hill Climbing | Genetic Algorithm |
+|---|---|---|
+| **Solutions at a time** | One current candidate | A population of candidates |
+| **New candidates** | Random neighbour | Crossover and mutation |
+| **Search guidance** | Improvement and optional momentum | Parent and survivor selection |
+| **Main challenge** | Local minima and step-size choice | Diversity versus convergence |
+| **Typical output** | Best coordinates and objective value | Best reconstructed image and MSE |
+
+Both approaches are **stochastic, derivative-free** and evaluated using objective function values.
 """
 )
 
-st.subheader("Benchmark Suite Overview")
-rows = []
-for spec in BENCHMARKS.values():
-    lo, hi = spec.default_bounds
-    rows.append(
-        {
-            "Benchmark": spec.name,
-            "Default Dim": spec.default_dim,
-            "Test Domain": f"[{lo:.3f}, {hi:.3f}]",
-            "Global Minimum": spec.global_min_description,
-            "Landscape Character": spec.landscape_notes,
-        }
-    )
-st.dataframe(rows, hide_index=True, width="stretch")
+with st.expander("Hill Climbing benchmark functions"):
+    rows = []
+    for spec in BENCHMARKS.values():
+        lower, upper = spec.default_bounds
+        rows.append(
+            {
+                "Function": spec.name,
+                "Dimensions": spec.default_dim,
+                "Default domain (per dimension)": f"[{lower:.3f}, {upper:.3f}]",
+                "Global optimum": spec.global_min_description,
+                "Landscape": spec.landscape_notes,
+            }
+        )
+    st.dataframe(rows, hide_index=True, use_container_width=True)
 
-st.info("Select **1 Exercise 01 Hill Climbing** in the left sidebar to explore the full report and interactive lab.")
+st.info(
+    "**Recommended next step:** Open **Exercise 02** to test how population size, "
+    "mutation, and crossover affect the image reconstruction. "
+    "Start at 16 × 16 pixels before increasing the resolution."
+)
